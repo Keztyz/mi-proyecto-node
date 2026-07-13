@@ -1,0 +1,54 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ "main" ] # Se activa en cada git push a la rama main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  crear_imagen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Iniciar sesión en GitHub Packages
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Construir y subir imagen de Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  desplegar:
+    needs: crear_imagen # Espera a que la imagen se suba con éxito
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conectar a AWS por SSH y actualizar app
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Iniciar sesión en GitHub Packages desde AWS
+            echo "${{ secrets.GH_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            
+            # Descargar la última versión de tu app
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            # Detener y borrar el contenedor viejo si ya existía
+            docker stop mi-app-node || true
+            docker rm mi-app-node || true
+            
+            # Correr el nuevo contenedor en el puerto 80 (Internet abierto)
+            docker run -d --name mi-app-node -p 80:3000 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
